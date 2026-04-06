@@ -2530,9 +2530,6 @@ def main():
     app.run_polling()
 
 
-if __name__ == "__main__":
-    main()
-
 # =========================================================
 # 🚀 AGGRESSIVE SMART MODE (SAFE INJECTION)
 # =========================================================
@@ -2622,3 +2619,6 @@ def cache_scan_results(results: list):
         upgraded.append(aggressive_signal_boost(r))
 
     _original_cache_scan_results(upgraded)
+
+if __name__ == "__main__":
+    main()
