@@ -2532,3 +2532,93 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# =========================================================
+# 🚀 AGGRESSIVE SMART MODE (SAFE INJECTION)
+# =========================================================
+
+def aggressive_signal_boost(result: dict) -> dict:
+    try:
+        signal = result.get("signal", "NONE")
+        trend = result.get("trend", "Neutral")
+        htf_trend = result.get("htf_trend", "Neutral")
+        adx = result.get("adx", 0)
+        price = result.get("price", 0)
+        vwap = result.get("vwap", 0)
+        confidence = result.get("confidence", 0)
+        regime = result.get("regime", "UNKNOWN")
+
+        # Only activate on strong structure
+        if regime not in ["TREND DAY", "BREAKOUT DAY"]:
+            return result
+
+        # =================================================
+        # 🔥 TREND CONTINUATION ENTRY (MAIN FIX)
+        # =================================================
+        if signal == "NONE":
+
+            if trend == "Bullish" and adx >= 25 and price > vwap:
+                result["signal"] = "CALL"
+                result["entry"] = "Trend Continuation"
+                confidence += 15
+                result["notes"] = "Aggressive BUY"
+
+            elif trend == "Bearish" and adx >= 25 and price < vwap:
+                result["signal"] = "PUT"
+                result["entry"] = "Trend Continuation"
+                confidence += 15
+                result["notes"] = "Aggressive SELL"
+
+        # =================================================
+        # ⚡ RELAX HTF FILTER
+        # =================================================
+        if result.get("signal") != "NONE" and trend != htf_trend:
+            confidence -= 5
+
+        # =================================================
+        # ⚡ RELAX STRICT FILTERS
+        # =================================================
+        if result.get("signal") != "NONE":
+
+            if result.get("volume_breakout") is False:
+                confidence += 5
+
+            if result.get("strength") == "❌ WEAK":
+                confidence += 10
+
+        # =================================================
+        # 🎯 FINAL CONFIDENCE
+        # =================================================
+        confidence = max(min(confidence, 95), 50)
+        result["confidence"] = confidence
+
+        if confidence >= 85:
+            result["strength"] = "🔥 EXTREME"
+        elif confidence >= 75:
+            result["strength"] = "💪 STRONG"
+        elif confidence >= 60:
+            result["strength"] = "⚠ MODERATE"
+        else:
+            result["strength"] = "❌ WEAK"
+
+        return result
+
+    except Exception as e:
+        print("Aggressive mode error:", e)
+        return result
+
+
+# =========================================================
+# 🔥 AUTO APPLY TO YOUR EXISTING RESULTS
+# =========================================================
+
+_original_cache_scan_results = cache_scan_results
+
+def cache_scan_results(results: list):
+    print("🚀 AGGRESSIVE MODE ACTIVE")
+
+    upgraded = []
+    for r in results:
+        upgraded.append(aggressive_signal_boost(r))
+
+    _original_cache_scan_results(upgraded)
