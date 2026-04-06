@@ -2520,6 +2520,110 @@ def main():
     app.add_handler(CommandHandler("banknifty", banknifty))
     app.add_handler(CommandHandler("sensex", sensex))
 
+    # =========================================================
+# 🚀 AGGRESSIVE SMART MODE (APPEND)
+# =========================================================
+
+def aggressive_signal_boost(result: dict) -> dict:
+    try:
+        signal = result.get("signal", "NONE")
+        trend = result.get("trend", "Neutral")
+        htf_trend = result.get("htf_trend", "Neutral")
+        adx = result.get("adx", 0)
+        price = result.get("price", 0)
+        vwap = result.get("vwap", 0)
+        confidence = result.get("confidence", 0)
+        regime = result.get("regime", "UNKNOWN")
+
+        # Only activate on strong market structure
+        if regime not in ["TREND DAY", "BREAKOUT DAY"]:
+            return result
+
+        # =================================================
+        # 🔥 FORCE TREND CONTINUATION (KEY LOGIC)
+        # =================================================
+        if signal == "NONE":
+
+            # Bullish continuation
+            if trend == "Bullish" and adx >= 25 and price > vwap:
+                result["signal"] = "CALL"
+                result["entry"] = "Trend Continuation"
+                confidence += 15
+                result["notes"] = "Aggressive: Trend continuation BUY"
+
+            # Bearish continuation
+            elif trend == "Bearish" and adx >= 25 and price < vwap:
+                result["signal"] = "PUT"
+                result["entry"] = "Trend Continuation"
+                confidence += 15
+                result["notes"] = "Aggressive: Trend continuation SELL"
+
+        # =================================================
+        # ⚡ HTF RELAXATION (NO BLOCK, ONLY PENALTY)
+        # =================================================
+        if signal != "NONE" and trend != htf_trend:
+            confidence -= 5  # small penalty instead of rejection
+
+        # =================================================
+        # ⚡ REMOVE STRICT FILTER BLOCKING
+        # =================================================
+        if signal != "NONE":
+            if result.get("volume_breakout") is False:
+                confidence += 5  # allow trades without volume spike
+
+            if result.get("strength") == "❌ WEAK":
+                confidence += 10  # upgrade weak to tradable
+
+        # =================================================
+        # 🧠 FINAL CONFIDENCE NORMALIZATION
+        # =================================================
+        confidence = max(min(confidence, 95), 50)
+        result["confidence"] = confidence
+
+        # =================================================
+        # 🎯 RECLASSIFY STRENGTH
+        # =================================================
+        if confidence >= 85:
+            result["strength"] = "🔥 EXTREME"
+        elif confidence >= 75:
+            result["strength"] = "💪 STRONG"
+        elif confidence >= 60:
+            result["strength"] = "⚠ MODERATE"
+        else:
+            result["strength"] = "❌ WEAK"
+
+        return result
+
+    except Exception as e:
+        print("Aggressive mode error:", e)
+        return result
+
+
+# =========================================================
+# 🔥 HOOK INTO FINAL RESULT (VERY IMPORTANT)
+# =========================================================
+
+def apply_aggressive_mode(results: list) -> list:
+    upgraded = []
+    for r in results:
+        upgraded.append(aggressive_signal_boost(r))
+    return upgraded
+
+
+# =========================================================
+# 🚀 INTEGRATION POINT (PATCH)
+# =========================================================
+
+# Wrap existing cache function
+_original_cache_scan_results = cache_scan_results
+
+def cache_scan_results(results: list):
+    print("🚀 AGGRESSIVE MODE ACTIVE")
+
+    results = apply_aggressive_mode(results)
+
+    _original_cache_scan_results(results)
+    
     if app.job_queue is None:
         raise RuntimeError("JobQueue is not available. Install python-telegram-bot with job-queue support.")
 
