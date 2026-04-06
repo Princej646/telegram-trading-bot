@@ -486,7 +486,16 @@ def cache_scan_results(results: list):
     global LAST_SCAN_RESULTS, LAST_SCAN_SUMMARY_TEXT
     LAST_SCAN_RESULTS = {result["name"]: result for result in results}
     LAST_SCAN_SUMMARY_TEXT = build_scan_summary(results)
+_original_cache_scan_results = cache_scan_results
 
+def cache_scan_results(results: list):
+    print("🚀 AGGRESSIVE MODE ACTIVE")
+
+    upgraded = []
+    for r in results:
+        upgraded.append(aggressive_signal_boost(r))
+
+    _original_cache_scan_results(upgraded)
 
 def get_best_signal_result(results: list) -> dict:
     valid = [
@@ -2604,21 +2613,7 @@ def aggressive_signal_boost(result: dict) -> dict:
         print("Aggressive mode error:", e)
         return result
 
-
-# =========================================================
-# 🔥 AUTO APPLY TO YOUR EXISTING RESULTS
-# =========================================================
-
-_original_cache_scan_results = cache_scan_results
-
-def cache_scan_results(results: list):
-    print("🚀 AGGRESSIVE MODE ACTIVE")
-
-    upgraded = []
-    for r in results:
-        upgraded.append(aggressive_signal_boost(r))
-
-    _original_cache_scan_results(upgraded)
-
 if __name__ == "__main__":
     main()
+
+
