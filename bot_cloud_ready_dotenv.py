@@ -5172,7 +5172,228 @@ def aggressive_signal_boost(result: dict) -> dict:
     except Exception as e:
         print("Aggressive mode error:", e)
         return result
+# =========================================================
+# 🚀 TREND CONTINUATION ENTRY LOGIC (APPEND MODE)
+# Paste this ABOVE: if __name__ == "__main__": main()
+# =========================================================
 
+def detect_trend_continuation_entry(
+    trend: str,
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    open_: pd.Series,
+    vwap: pd.Series,
+    adx_value: float,
+    session_name: str,
+) -> str:
+    try:
+        if len(close) < 4 or len(high) < 4 or len(low) < 4 or len(open_) < 4 or len(vwap) < 4:
+            return "NONE"
+
+        price = safe_float(close.iloc[-1])
+        prev_close = safe_float(close.iloc[-2])
+        prev_high = safe_float(high.iloc[-2])
+        prev_low = safe_float(low.iloc[-2])
+
+        last_open = safe_float(open_.iloc[-1])
+        last_high = safe_float(high.iloc[-1])
+        last_low = safe_float(low.iloc[-1])
+
+        vwap_now = safe_float(vwap.iloc[-1])
+
+        last_range = max(last_high - last_low, 0.01)
+        last_body = abs(price - last_open)
+        body_ratio = last_body / last_range
+
+        strong_session = session_name in [
+            "PRIME TREND WINDOW",
+            "AFTERNOON BUILDUP",
+            "CLOSING MOVE WINDOW",
+        ]
+
+        if adx_value < 22:
+            return "NONE"
+
+        # Bullish continuation
+        if trend == "Bullish" and price > vwap_now and strong_session:
+            # breakout continuation
+            if price > prev_high:
+                return "CALL"
+            # strong bullish hold candle above previous close
+            if price > last_open and price >= prev_close and body_ratio >= 0.45:
+                return "CALL"
+
+        # Bearish continuation
+        if trend == "Bearish" and price < vwap_now and strong_session:
+            # breakdown continuation
+            if price < prev_low:
+                return "PUT"
+            # strong bearish hold candle below previous close
+            if price < last_open and price <= prev_close and body_ratio >= 0.45:
+                return "PUT"
+
+        return "NONE"
+    except Exception as e:
+        logger.warning("Trend continuation entry detection failed: %s", e)
+        return "NONE"
+
+
+_original_generate_signal = generate_signal
+
+def generate_signal(
+    symbol: str,
+    trend: str,
+    momentum: float,
+    regime: str,
+    trading_allowed: bool,
+    liquidity_trap: bool,
+    trap_direction: str,
+    session_name: str,
+    breakout_confirmed: bool,
+    breakout_direction: str,
+    close: pd.Series,
+    open_: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+) -> str:
+    signal = _original_generate_signal(
+        symbol=symbol,
+        trend=trend,
+        momentum=momentum,
+        regime=regime,
+        trading_allowed=trading_allowed,
+        liquidity_trap=liquidity_trap,
+        trap_direction=trap_direction,
+        session_name=session_name,
+        breakout_confirmed=breakout_confirmed,
+        breakout_direction=breakout_direction,
+        close=close,
+        open_=open_,
+        high=high,
+        low=low,
+    )
+
+    # Keep original decision if already valid
+    if signal != "NONE":
+        return signal
+
+    # Continuation logic only in valid market structure
+    if session_name == "MARKET CLOSED":
+        return "NONE"
+
+    if regime not in ["TREND DAY", "BREAKOUT DAY"]:
+        return "NONE"
+
+    if not trading_allowed:
+        return "NONE"
+
+    if liquidity_trap and trap_direction != "NONE":
+        return "NONE"
+
+    if not detect_momentum_alignment(trend, momentum):
+        return "NONE"
+
+    # Relax HTF for strong intraday continuation
+    htf_trend = get_higher_timeframe_trend(symbol)
+    htf_conflict = htf_trend != "Neutral" and trend != htf_trend
+
+    # We need VWAP + ADX here, so compute lightweight versions
+    try:
+        volume_proxy = pd.Series([1.0] * len(close), index=close.index)
+        vwap_series = calculate_vwap(high, low, close, volume_proxy)
+        adx_series = calculate_adx(high, low, close)
+        adx_value = safe_float(adx_series.iloc[-1], 0.0)
+    except Exception:
+        return "NONE"
+
+    continuation_signal = detect_trend_continuation_entry(
+        trend=trend,
+        close=close,
+        high=high,
+        low=low,
+        open_=open_,
+        vwap=vwap_series,
+        adx_value=adx_value,
+        session_name=session_name,
+    )
+
+    if continuation_signal == "NONE":
+        return "NONE"
+
+    # If HTF conflicts, still allow continuation on strong ADX/session
+    if htf_conflict and adx_value < 28 and session_name != "CLOSING MOVE WINDOW":
+        return "NONE"
+
+    logger.info(
+        "TREND CONTINUATION ENTRY ACTIVE | %s | trend=%s | htf=%s | adx=%.2f | session=%s | signal=%s",
+        symbol,
+        trend,
+        htf_trend,
+        adx_value,
+        session_name,
+        continuation_signal,
+    )
+    return continuation_signal
+
+
+_original_aggressive_signal_boost = aggressive_signal_boost
+
+def aggressive_signal_boost(result: dict) -> dict:
+    result = _original_aggressive_signal_boost(result)
+
+    try:
+        signal = result.get("signal", "NONE")
+        trend = result.get("trend", "Neutral")
+        htf_trend = result.get("htf_trend", "Neutral")
+        adx = safe_float(result.get("adx", 0), 0)
+        price = safe_float(result.get("price", 0), 0)
+        vwap = safe_float(result.get("vwap", 0), 0)
+        confidence = int(result.get("confidence", 0))
+        regime = result.get("regime", "UNKNOWN")
+        session_name = result.get("session", "UNKNOWN")
+        entry = result.get("entry", "No Trade")
+
+        if regime not in ["TREND DAY", "BREAKOUT DAY"]:
+            return result
+
+        strong_session = session_name in [
+            "PRIME TREND WINDOW",
+            "AFTERNOON BUILDUP",
+            "CLOSING MOVE WINDOW",
+        ]
+
+        # Promote continuation setups that still came through as no-trade
+        if signal in ["CALL", "PUT"] and entry in ["No Trade", "Wait", "Wait Breakout", "Wait Breakdown"]:
+            if strong_session and adx >= 22:
+                result["entry"] = "Trend Continuation Entry"
+                confidence += 8
+
+        # Confidence boost for aligned continuation
+        if signal == "CALL" and trend == "Bullish" and price >= vwap and adx >= 25 and strong_session:
+            confidence += 10
+
+        if signal == "PUT" and trend == "Bearish" and price <= vwap and adx >= 25 and strong_session:
+            confidence += 10
+
+        # Very small HTF penalty only
+        if signal != "NONE" and htf_trend not in ["Neutral", trend]:
+            confidence -= 2
+
+        confidence = max(min(confidence, 95), 50)
+        result["confidence"] = confidence
+        result["strength"] = classify_signal_strength(confidence, regime)
+
+        notes = str(result.get("notes", "")).strip()
+        extra_note = "Trend continuation logic applied"
+        if extra_note not in notes:
+            result["notes"] = f"{notes} | {extra_note}".strip(" |")
+
+        return result
+
+    except Exception as e:
+        logger.warning("Trend continuation aggressive boost failed: %s", e)
+        return result
 if __name__ == "__main__":
     main()
 
