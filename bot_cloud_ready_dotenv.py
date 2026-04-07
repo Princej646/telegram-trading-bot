@@ -2247,13 +2247,13 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = await run_full_scan_once()
 
     message = (
-        "📊 MANUAL MARKET SCAN\n\n"
-        f"{results[0]['message']}\n\n"
-        f"{results[1]['message']}\n\n"
-        f"{results[2]['message']}"
+        "📊 Market Scan\n\n"
+        f"{build_signal_summary(results[0])}\n\n"
+        f"{build_signal_summary(results[1])}\n\n"
+        f"{build_signal_summary(results[2])}"
     )
-    await update.message.reply_text(message)
 
+    await update.message.reply_text(message)
 
 async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_authorized(update):
@@ -2535,7 +2535,175 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to send error message to Telegram")
 
+# =========================================================
+# 🛡 SMART STOP-LOSS + PULLBACK ENTRY FILTER
+# Paste ABOVE def main():
+# =========================================================
 
+def detect_pullback_entry(
+    signal: str,
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    open_: pd.Series,
+    ema20: pd.Series,
+    vwap: pd.Series,
+    adx_value: float,
+    session_name: str,
+) -> Tuple[str, float]:
+    try:
+        if len(close) < 5 or len(high) < 5 or len(low) < 5 or len(open_) < 5:
+            return "NONE", 0.0
+
+        price = safe_float(close.iloc[-1])
+        prev_close = safe_float(close.iloc[-2])
+        prev_high = safe_float(high.iloc[-2])
+        prev_low = safe_float(low.iloc[-2])
+        last_open = safe_float(open_.iloc[-1])
+        ema20_now = safe_float(ema20.iloc[-1])
+        vwap_now = safe_float(vwap.iloc[-1])
+
+        strong_session = session_name in [
+            "PRIME TREND WINDOW",
+            "AFTERNOON BUILDUP",
+            "CLOSING MOVE WINDOW",
+        ]
+
+        if not strong_session or adx_value < 20:
+            return "NONE", 0.0
+
+        # Bullish pullback continuation
+        if signal == "CALL":
+            # price remains above structure and re-holds EMA/VWAP zone
+            if price >= ema20_now and price >= vwap_now and price > last_open and price >= prev_close:
+                trigger = max(prev_high, price)
+                return "PULLBACK_CALL", round(trigger, 2)
+
+        # Bearish pullback continuation
+        if signal == "PUT":
+            if price <= ema20_now and price <= vwap_now and price < last_open and price <= prev_close:
+                trigger = min(prev_low, price)
+                return "PULLBACK_PUT", round(trigger, 2)
+
+        return "NONE", 0.0
+
+    except Exception as e:
+        logger.warning("Pullback entry detection failed: %s", e)
+        return "NONE", 0.0
+
+
+def smart_stop_loss(signal: str, entry_price: float, swing_high: float, swing_low: float, atr_value: float) -> float:
+    try:
+        atr_buffer = max(atr_value * 0.35, 20)
+
+        if signal == "CALL":
+            sl = min(entry_price - atr_buffer, swing_low - 5)
+            return round(sl, 2)
+
+        if signal == "PUT":
+            sl = max(entry_price + atr_buffer, swing_high + 5)
+            return round(sl, 2)
+
+        return 0.0
+    except Exception as e:
+        logger.warning("Smart stop-loss failed: %s", e)
+        return 0.0
+
+
+_original_get_entry_timing_and_trigger = get_entry_timing_and_trigger
+
+def get_entry_timing_and_trigger(signal: str, close: pd.Series, high: pd.Series, low: pd.Series) -> Tuple[str, float]:
+    entry_mode, trigger = _original_get_entry_timing_and_trigger(signal, close, high, low)
+
+    try:
+        if signal == "NONE" or len(close) < 5:
+            return entry_mode, trigger
+
+        # if already enter now, keep original behavior
+        if entry_mode == "Enter Now":
+            return entry_mode, trigger
+
+        price = safe_float(close.iloc[-1])
+        prev_high = safe_float(high.iloc[-2])
+        prev_low = safe_float(low.iloc[-2])
+
+        if signal == "CALL":
+            # cleaner continuation style
+            if price >= prev_high * 0.998:
+                return "Pullback Buy", prev_high
+
+        if signal == "PUT":
+            if price <= prev_low * 1.002:
+                return "Pullback Sell", prev_low
+
+        return entry_mode, trigger
+
+    except Exception as e:
+        logger.warning("Entry timing override failed: %s", e)
+        return entry_mode, trigger
+
+# =========================================================
+# ✨ SHORT SMART MESSAGE FORMAT
+# Paste ABOVE def main():
+# =========================================================
+
+def short_trend_label(trend: str) -> str:
+    if trend == "Bullish":
+        return "Bullish ↑"
+    if trend == "Bearish":
+        return "Bearish ↓"
+    return "Flat ~"
+
+
+def short_strength_label(strength: str) -> str:
+    if "EXTREME" in strength:
+        return "Extreme"
+    if "STRONG" in strength:
+        return "Strong"
+    if "MODERATE" in strength:
+        return "Moderate"
+    return "Weak"
+
+
+def build_signal_summary(result: dict) -> str:
+    trend_label = short_trend_label(result.get("trend", "Neutral"))
+    signal = result.get("signal", "NONE")
+    confidence = result.get("confidence", 0)
+    entry = result.get("entry", "No Trade")
+    regime = result.get("regime", "UNKNOWN")
+    strength = short_strength_label(result.get("strength", "❌ WEAK"))
+
+    if signal == "NONE":
+        return (
+            f"{result['name']}\n"
+            f"{trend_label} | {regime}\n"
+            f"No trade | Conf {confidence}%"
+        )
+
+    return (
+        f"{result['name']}\n"
+        f"{signal} | {trend_label} | {strength}\n"
+        f"Entry: {entry} @ {result.get('entry_trigger_price', result.get('price', 0))}\n"
+        f"SL: {result.get('stop_loss', 0)} | TGT: {result.get('target_price', 0)} | Conf {confidence}%"
+    )
+
+
+def build_best_trade_message(result: dict) -> str:
+    if not result:
+        return "No valid setup"
+
+    trend_label = short_trend_label(result.get("trend", "Neutral"))
+    signal = result.get("signal", "NONE")
+    confidence = result.get("confidence", 0)
+    entry = result.get("entry", "No Trade")
+
+    return (
+        f"🏆 Best Trade\n"
+        f"{result.get('name', 'UNKNOWN')} | {signal}\n"
+        f"{trend_label} | Conf {confidence}%\n"
+        f"Entry: {entry} @ {result.get('entry_trigger_price', result.get('price', 0))}\n"
+        f"SL {result.get('stop_loss', 0)} | TGT {result.get('target_price', 0)}"
+    )
 # =========================================================
 # MAIN
 # =========================================================
@@ -5040,7 +5208,45 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to send error message to Telegram")
 
+def short_trend_label(trend: str) -> str:
+    if trend == "Bullish":
+        return "Bullish ↑"
+    if trend == "Bearish":
+        return "Bearish ↓"
+    return "Flat ~"
 
+
+def short_strength_label(strength: str) -> str:
+    if "EXTREME" in strength:
+        return "Extreme"
+    if "STRONG" in strength:
+        return "Strong"
+    if "MODERATE" in strength:
+        return "Moderate"
+    return "Weak"
+
+
+def build_signal_summary(result: dict) -> str:
+    trend_label = short_trend_label(result.get("trend", "Neutral"))
+    signal = result.get("signal", "NONE")
+    confidence = result.get("confidence", 0)
+    entry = result.get("entry", "No Trade")
+    regime = result.get("regime", "UNKNOWN")
+    strength = short_strength_label(result.get("strength", "❌ WEAK"))
+
+    if signal == "NONE":
+        return (
+            f"{result['name']}\n"
+            f"{trend_label} | {regime}\n"
+            f"No trade | Conf {confidence}%"
+        )
+
+    return (
+        f"{result['name']}\n"
+        f"{signal} | {trend_label} | {strength}\n"
+        f"Entry: {entry} @ {result.get('entry_trigger_price', result.get('price', 0))}\n"
+        f"SL: {result.get('stop_loss', 0)} | TGT: {result.get('target_price', 0)} | Conf {confidence}%"
+    )
 # =========================================================
 # MAIN
 # =========================================================
